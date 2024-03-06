@@ -1,0 +1,15 @@
+{% extends "_a_eos.j2" -%}
+{% block top_vlans -%}
+{{ super() -}}
+vlan 4094
+   name mlag
+!
+{% endblock -%}
+{% block top_interfaces -%}
+{{ super() -}}
+interface Vlan4094
+   ip address 10.1.1.2/30
+!
+ip virtual-router mac-address 00:1c:73:00:11:99
+!
+{% endblock -%}

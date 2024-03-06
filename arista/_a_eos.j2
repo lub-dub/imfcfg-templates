@@ -1,0 +1,146 @@
+!
+{% block top_vlans %}
+{% for vid, vlan in vlans | dictsort %}
+  {% if (vlan.sitewide or vid in active_vlans) %}
+vlan {{ vid }}
+   name {{ vlans[vid].name| replace(' ', '-')| replace('(', '')| replace(')', '')| replace('&-', '') }}
+!
+  {% endif %}
+{% endfor %}
+{% endblock %}
+{% macro iface_top(iface) %}
+{%   if not (iface.ifname.startswith('Port-Channel') or iface.lagname) %}
+   mtu 9192
+{%   endif %}
+{%   if 'speed-override-1G' in iface.tags %}
+   speed forced 1000full
+{%   endif %}
+{% endmacro %}
+{% macro iface_bottom(iface) %}
+{%   if 'speed-override-1G' in iface.tags %}
+   transceiver media override 1000base-bx10-d
+{%   endif %}
+{% endmacro %}
+{#
+ #  interfaces sorted by name
+ #}
+{% block top_interfaces %}
+{% block interfaces %}{% endblock %}
+{% for iface in (coreifs + distifs + lagifs + accessifs + unusedifs) | sort %}
+{%   if iface in coreifs %}
+interface {{ iface.ifname }}
+   description Core: {{ iface.remote }}
+   no switchport
+   ip address {{ iface.ip4 }}
+   ipv6 address {{ iface.ip6 }}
+   isis enable CORE
+   isis network point-to-point
+!
+{%   elif iface in distifs and not iface.core %}
+{%     set distif = iface %}
+interface {{ distif.ifname }}
+   description Dist: {{ distif.remote }}
+{{ iface_top(iface) -}}
+{%     if "mlag" in iface.tags and not hostname.startswith("core-") %}
+   switchport trunk allowed vlan all
+{% endif %}
+    {% if distif.access_vlans %}
+   switchport trunk allowed vlan {{distif.access_vlans | vlanjoin}}
+   switchport mode trunk
+    {% elif hostname.startswith("core-") and distif.remote.startswith("core-") %}
+   switchport mode trunk
+    {% endif %}
+{{ iface_bottom(iface) -}}
+{%     if iface.mclag %}
+   mlag {{ iface.ifname[-3:] }}
+{%     endif %}
+{%     if 'STP-untrusted' in iface.tags %}
+   spanning-tree bpdufilter enable
+{%     endif %}
+{%     if iface.ptp_upstream %}
+   ptp enable
+   ptp pdelay-neighbor-threshold 10000
+{%     endif %}
+!
+{%   elif iface in lagifs %}
+interface {{ iface.ifname }}
+   description LAG MEMBER: {{ iface.lagname }}
+   channel-group {{ iface.lagname|replace('Port-Channel', '') }} mode active
+{{ iface_top(iface) -}}
+{{ iface_bottom(iface) -}}
+!
+{%   elif iface in accessifs %}
+interface {{ iface.ifname if iface.ifname != 'Management' else 'Management 1' }}
+{%     if iface.remote %}
+   description {{ iface.remote }}
+{%     else %}
+   description ""
+{%     endif %}
+{{ iface_top(iface) -}}
+{%   if (not iface.untagged) or iface.hybrid %}
+{%     if iface.untagged  %}
+   switchport trunk native vlan {{ iface.untagged }}
+{%     endif %}
+{%     if iface.vlan_all %}
+{%       if not hostname.startswith("core-") %}
+   switchport trunk allowed vlan all
+{%       endif %}
+{%     else %}
+{%       set pvlans = iface.vlans(vlans, untagged=True)|map(attribute='vid')|vlanjoin %}
+{%       if pvlans != '' %}
+   switchport trunk allowed vlan {{ pvlans }}
+{%       endif %}
+{%     endif %}
+   switchport mode trunk
+{%   else %}
+   switchport access vlan {{ iface.untagged }}
+{%   endif %}
+{% if iface.mclag %}
+   mlag {{ iface.ifname[-3:] }}
+{% endif %}
+   spanning-tree bpdufilter enable
+{{ iface_bottom(iface) -}}
+!
+{%   elif iface in unusedifs %}
+interface {{ iface.ifname }}
+!
+{%   endif %}
+{% endfor %}
+interface Loopback0
+   ip address {{ lo0['inet'] }}
+   ipv6 address {{ lo0['inet6'] }}
+   isis enable CORE
+   isis passive
+!
+{# VLAN INTERFACES #}
+{% for vid, vlan in vlans | dictsort %}
+  {% if (vlan.sitewide or vid in active_vlans) %}
+    {% if vlan.prefix4 %}
+interface Vlan{{ vid }}
+   mtu 9000
+   ip address {{ vlan.prefix4['prefix'] | nethost(addr = siteid - 127 ) }}
+      {% if vlan.prefix6 %}
+      {% endif %}
+{%       if prefixes[vid].dhcp %}
+   ip helper-address 94.45.226.5
+   ip helper-address 94.45.226.6
+{%       endif %}
+   ipv6 address {{ vlan.prefix6['prefix'] | nethost(offset = siteid+1, nomask=False) }}
+{%       if 'acl-mgmt-only' in vlan.tags %}
+   ip access-group MGMT-ACCESS out
+{%       endif %}
+{% if vlan.prefix4['firewall'] %}
+   ip access-group {{ vlan.prefix4['firewall'] }}-in-v4 in
+   ip access-group {{ vlan.prefix4['firewall'] }}-out-v4 out
+{% endif %}
+{% if vlan.prefix6 and vlan.prefix6['firewall'] %}
+   ipv6 access-group {{ vlan.prefix4['firewall'] }}-in-v6 in
+   ipv6 access-group {{ vlan.prefix4['firewall'] }}-out-v6 out
+{% endif %}
+   ip virtual-router address {{ vlan.prefix4['prefix'] | nethost(nomask=True,offset=1) }}
+   ipv6 virtual-router address {{ vlan.prefix6['prefix'] | nethost(nomask = True,offset=1) }}
+!
+    {% endif %}
+  {% endif %}
+{% endfor %}
+{% endblock %}
