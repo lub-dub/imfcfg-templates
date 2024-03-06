@@ -1,0 +1,92 @@
+{# c3cfg: switch device_type (2930f-8g-poep-2sfpp|3500yl-24g-pwr-10g|3500yl-48g-pwr-10g|2900-48g|2920-24g|2910al-24g|2910al-24g-10g|2530-24g) #}
+
+; {{ hostname }} Configuration Editor; Created on release 
+hostname "{{ hostname }}"
+snmp-server contact "{{ event_config["snmp_contact"] }}" 
+snmp-server location "{{ event_config["snmp_location"] }}" 
+time timezone 60 
+time daylight-time-rule Western-Europe 
+fastboot 
+no web-management 
+no telnet-server
+password manager user-name admin plaintext {{ event_config["admin_password"] }}
+password operator user-name admin plaintext {{ event_config["admin_password"] }}
+{% if mgmt_ip4 %}
+ip default-gateway {{ mgmt_ip4|nethost(addr=1, nomask=True) }}
+!
+{% endif %}
+{%- for ip in event_config['ntp_servers'] %}
+{%- endfor %}
+timesync sntp 
+sntp unicast
+fastboot
+{% for ip in event_config['syslog_servers'] %}
+logging {{ ip }}
+{% endfor %}
+snmp-server community "{{ event_config["snmp_community"] }}" Operator
+
+{% for vid in access_vlans|sort %}
+{% set vlan = vlans[vid] %}
+vlan {{ vid }}
+{% if vlan.name %}
+   name "{{ vlan.name|replace(' ', '-') }}"
+{% else %}
+   name "{{ vlan.vid_name|replace(' ', '-') }}'"
+{% endif %}
+{% if vid == 2232 %}
+   ip address {{ mgmt_ip4|nethost(nomask=True) }} {{ mgmt_ip4|nethost(mask=True)}}
+{% endif %}
+{% if accessifs|selectattr('untagged', 'equalto', vid)|list|length > 0 %}
+   untagged {{ accessifs|selectattr('untagged', 'equalto', vid)|map(attribute="ifname")|reject("equalto", "Vlan-Interface2232")|reject("equalto", "Vlan2232")|join(",") }}
+{% endif %}
+{% if accessifs|selectattr('untagged', 'none')|list|length > 0 %}
+   tagged {{ accessifs|selectattr('untagged', 'none')|map(attribute="ifname")|reject("equalto", "Vlan-Interface2232")|reject("equalto", "Vlan2232")|join(",") }}
+{% endif %}
+   exit
+{% endfor %}
+vlan 1
+   no untagged all
+   no tagged all
+   no ip address
+   no ipv6 enable
+   no ipv6 address dhcp full
+   exit
+
+oobm
+  disable
+
+management-vlan 2232
+
+no dhcp-relay
+{% if event_config['radius_enabled'] %}
+aaa authentication login privilege-mode 
+aaa authentication console login radius local 
+aaa authentication ssh login radius local 
+{% for ip in event_config['radius_servers'] %}
+radius-server host {{ ip }} key {{ event_config['radius_key'] }}
+{% endfor %} 
+{% endif %}
+dhcp-snooping
+no dhcp-snooping option 82
+no dhcp-snooping verify mac
+ip ssh
+
+{% if accessifs|selectattr('untagged', 'none')|list|length > 0 %}
+spanning-tree {{ accessifs|selectattr('untagged', 'none')|map(attribute="ifname")|reject("equalto", "Vlan-Interface2232")|reject("equalto", "Vlan2232")|join(",") }} bpdu-filter
+{% endif %}
+{% if accessifs|selectattr('untagged')|list|length > 0 %}
+spanning-tree {{ accessifs|selectattr('untagged')|map(attribute="ifname")|reject("equalto", "Vlan-Interface2232")|reject("equalto", "Vlan2232")|join(",") }} bpdu-protection
+loop-protect {{ accessifs|selectattr('untagged')|map(attribute="ifname")|reject("equalto", "Vlan-Interface2232")|reject("equalto", "Vlan2232")|join(",") }}
+{% endif %}
+
+{% for iface in accessifs %}
+{% if not regex_match("Vlan.*", iface.ifname) %}
+interface {{ iface.ifname }}
+   description "{{ iface.remote }}"
+{% if (not iface.untagged) or iface.hybrid %}
+   dhcp-snooping trust
+{% endif %}
+exit
+{% endif %}
+{% endfor %}
+allow-unsupported-transceiver
