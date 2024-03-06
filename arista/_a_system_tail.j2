@@ -1,0 +1,18 @@
+management api http-commands
+   no shutdown
+   !
+   vrf default
+      no shutdown
+!
+management console
+   idle-timeout 60
+!
+{% if not access %}
+management http-server
+   protocol http
+!
+{% endif %}
+management ssh
+   idle-timeout 60
+!
+end

@@ -1,0 +1,9 @@
+snmp-server contact "{{ event_config["snmp_contact"] }}"
+snmp-server location "{{ event_config["snmp_location"] }}"
+snmp-server community {{ event_config["snmp_community"] }} ro SNMP-CLIENTS
+snmp-server vrf management
+!
+ip access-list standard SNMP-CLIENTS
+   !! NOC internal servers
+   10 permit {{event_config["snmp_server"] }}
+

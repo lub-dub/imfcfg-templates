@@ -1,0 +1,58 @@
+transceiver qsfp default-mode 4x10G
+!
+logging buffered 512
+no logging console
+{% for server in event_config["syslog_server"] %}
+logging host {{ server }}
+{% endfor %}
+logging format timestamp high-resolution
+logging format hostname fqdn
+!
+hostname {{hostname}}
+
+{% for server in event_config["dns_servers"] %}
+ip name-server vrf default {{ server }}
+{% endfor %}
+!
+{% for server in event_config["ntp_servers"] %}
+ntp server {{ server }}
+{% endfor %}
+!
+{% include "_a_snmp.j2" %}
+!
+{% if not access %}
+spanning-tree mode mstp
+spanning-tree mst 0 priority 0
+!
+{% endif %}
+transceiver qsfp default-mode 4x10G
+!
+aaa authorization exec default local
+aaa authorization commands all default local
+!
+no aaa root
+!
+username admin role network-admin privilege 15 secret sha512 {{ hash_password(event_config["admin_password"]) }}
+{% block gen_users %}
+{%   for user, sshkey in access_users.items() %}
+{%     if user != 'admin' %}
+username {{ user }} role network-admin privilege 15 secret sha512 {{ event_config["crypted_admin_password"] }}
+{%     endif %}
+username {{ user }} ssh-key {{ sshkey }}
+{%   endfor %}
+
+{% for user in users.values() | sort %}
+{% if not hostname.startswith("rt-") or user in groups['core'] %}
+{% if user in keys %}
+username {{ user }} privilege 15 role network-admin nopassword
+username {{ user }} ssh-key {{ keys[user] }}
+{% endif %}
+{% endif %}
+{% endfor %}
+
+{% endblock %}
+!
+clock timezone Europe/Amsterdam
+!
+no vlan 1
+

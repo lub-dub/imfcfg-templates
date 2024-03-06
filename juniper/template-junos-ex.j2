@@ -1,0 +1,80 @@
+{# c3cfg: switch device_type ^ex(2200|3200|3300|4200) #}
+
+
+
+{% extends "template-junos-switch-base.j2" -%}
+
+{% block top_interfaces %}
+{% for iface in accessifs %}
+{%   if not iface.is_virtual %}
+    {{ iface.ifname }} {
+        description "{{ iface.remote }}";
+{%     if iface.is_lag_master %}
+        aggregated-ether-options {
+            lacp {
+                active;
+                periodic fast;
+            }
+        }
+{%     endif %}
+        unit 0 {
+            family ethernet-switching {
+{%     if (iface.tagged|length > 1) or iface.vlan_all  %}
+                port-mode trunk;
+{%       if iface.untagged %}
+                native-vlan-id {{ vlans[iface.untagged].vid }};
+{%       endif %}
+                vlan {
+{%         if iface.vlan_all %}
+                    members all;
+{%       if iface.untagged %}
+                except {{ vlans[iface.untagged].vid_name }};
+{%       endif %}
+{%         else %}
+                    members [ {{ iface.vlans(vlans)|map(attribute='vid_name')|map('replace', ' ', '-')|join(" ") }} ];
+{%         endif %}
+                }
+{%     elif iface.untagged %}
+                port-mode access;
+                vlan {
+                    members {{ vlans[iface.untagged].vid_name }};
+                }
+{%     endif %}
+            }
+        }
+    }
+{%   endif %}
+{% endfor %}
+
+{% endblock %}
+
+
+{% block port_security %}
+ethernet-switching-options {
+     secure-access-port {
+{% for iface in accessifs %}
+{%   if not (iface.is_virtual or iface.tagged|length or iface.vlan_all) %}
+        interface {{ iface.ifname }} {
+            mac-limit {{ event_config['access_mac_limit'] }} action shutdown;
+        }
+{%   endif %}
+{% endfor %}
+    }
+    port-error-disable {
+        disable-timeout {{ event_config['access_recovery_timeout'] }};
+    }
+    storm-control {
+        interface all;
+{% for iface in accessifs %}
+{%   if 'nostorm' in iface.tags %}
+        interface {{ iface.ifname }} {
+            no-multicast;
+        }
+{%   endif %}
+{% endfor %}
+    }
+    bpdu-block {
+        disable-timeout {{ event_config['access_recovery_timeout'] }};
+    }
+}
+{% endblock %}

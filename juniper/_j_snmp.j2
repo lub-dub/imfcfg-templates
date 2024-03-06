@@ -1,0 +1,15 @@
+snmp {
+    location "{{ event_config["snmp_location"] }}";
+    contact "{{ event_config["snmp_contact"] }}";
+    filter-interfaces {
+        interfaces {
+            "!^(((xe|ge|et)-[0-9][0-9]?\/[0-9][0-9]?\/[0-9][0-9]?|ae[0-9][0-9]?)\.?(0|100|2002|2003)?|irb\.[0-9]+)$"
+        }
+    }
+    community {{ event_config["snmp_community"] }} {
+        authorization read-only;
+        client-list-name noc;
+    }
+    {% block snmp %}{% endblock %}
+}
+

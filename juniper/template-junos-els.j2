@@ -1,0 +1,104 @@
+{# c3cfg: switch device_type ^(?:juniper-)?ex(2300|3400) #}
+
+{% extends "template-junos-switch-base.j2" -%}
+
+{% block top_interfaces %}
+{% for iface in accessifs %}
+{%   if not iface.is_virtual and (not iface._iface.mgmt_only) %}
+    {{ iface.ifname }} {
+	{% if "no-fec" in iface.tags %}
+	gigether-options {
+		fec none;
+	}
+	{% endif %}
+        description "{{ iface.remote }}";
+        mtu 9192;
+{%     if iface.is_lag_master %}
+        aggregated-ether-options {
+            lacp {
+                active;
+                periodic fast;
+            }
+        }
+{%     endif %}
+{%     if iface.untagged and ((iface.tagged|length) > 2 ) %}
+         native-vlan-id {{ vlans[iface.untagged].vid }};
+{%     endif %}
+{%     if iface.ifname != 'vme' and iface.ifname != 'me0' %}
+         unit 0 {
+            family ethernet-switching {
+{%         if (iface.tagged|length) > 1 or (iface.vlan_all and not iface.untagged) %}
+                interface-mode trunk;
+
+                vlan {
+{%             if iface.vlan_all %}
+                    members all;
+{%             else %}
+                    members [ {{ iface.vlans(vlans)|map(attribute='vid_name')|map('replace', ' ', '-')|join(" ") }} ];
+{%             endif %}
+                }
+{%         elif iface.untagged %}
+                interface-mode access;
+                vlan {
+                    members {{ vlans[iface.untagged].vid_name }};
+                }
+{%         endif %}
+{%         if iface.ifname not in ['ae0'] and 'nostorm' not in iface.tags %}
+                storm-control limit_all_15kbps;
+{%         endif %}
+                recovery-timeout {{ event_config['access_recovery_timeout'] }};
+            }
+        }
+{%     endif %}
+    }
+{%   endif %}
+{% endfor %}
+{% endblock %}
+
+
+{% block port_security %}
+forwarding-options {
+
+    storm-control-profiles limit_all_15kbps {
+        all {
+            bandwidth-level 15000;
+        }
+    }
+
+    access-security {
+        router-advertisement-guard {
+            interface {
+{% for iface in accessifs %}
+{%   if not (iface.is_virtual or iface.tagged|length>1 or iface._iface.mgmt_only) %}
+                {{ iface.ifname }}.0 {
+                    mark-interface {
+                        block;
+                    }
+                }
+{%   elif iface.tagged|length  and not iface.is_virtual and not iface.untagged %}
+                {{ iface.ifname }}.0 {
+                    mark-interface {
+                        trusted;
+                    }
+                }
+{%   endif %}
+{% endfor %}
+            }
+        }
+    }
+}
+
+switch-options {
+{% for iface in accessifs %}
+{%   if not (iface.is_virtual or not iface.untagged  or iface.vlan_all or iface._iface.mgmt_only) %}
+    interface {{ iface.ifname }} {
+        interface-mac-limit {
+            {{ event_config['access_mac_limit'] }};
+            packet-action shutdown;
+        }
+    }
+{%   endif %}
+{% endfor %}
+}
+{% endblock %}
+

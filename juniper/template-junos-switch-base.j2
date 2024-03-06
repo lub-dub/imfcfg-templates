@@ -1,0 +1,158 @@
+groups {
+    Interface_MTU {
+        interfaces <*> {
+            mtu 9192;
+        }
+    }
+}
+{% include "_j_system.j2" %}
+
+chassis {
+    aggregated-devices {
+        ethernet {
+             device-count 32;
+        }
+    }
+    alarm {
+        management-ethernet {
+             link-down ignore;
+        }
+    }
+    lcd-menu {
+        fpc 0 {
+            menu-item {
+                maintenance-menu disable;
+            }
+        }
+        fpc 1 {
+            menu-item {
+                maintenance-menu disable;
+            }
+        }
+        fpc 2 {
+            menu-item {
+                maintenance-menu disable;
+            }
+        }
+        fpc 3 {
+            menu-item {
+                maintenance-menu disable;
+            }
+        }
+    }
+    {% block bottom_chassis  %}
+
+    {% endblock %}
+}
+interfaces {
+{% block top_interfaces %}
+
+{% endblock %}
+
+{% for lagif in lagifs %}
+    {{ lagif.ifname }} {
+	{% if "no-fec" in lagif.tags %}
+	gigether-options {
+		fec none;
+	}
+	{% endif %}
+        description "{{ lagif.lagname }}";
+        ether-options {
+            802.3ad {{ lagif.lagname }};
+        }
+    }
+{% endfor %}
+
+
+{% if is_junos_els(device) %}
+irb {
+{% else %}
+vlan {
+{% endif %}
+{% for iface in accessifs %}
+{%   if iface.is_virtual %}
+        unit {{ iface.ifname|replace('vlan.', '')|replace('irb.','') }} {
+{%     if mgmt_ip4 %}
+            family inet {
+                address {{ mgmt_ip4 }};
+            }
+{%     endif %}
+{%     if mgmt_ip6 %}
+            family inet6 {
+                 address {{ mgmt_ip6 }};
+            }
+{%     endif %}
+         }
+{%   endif %}
+{% endfor %}
+    }
+    me0 {
+         disable;
+    }
+}
+
+{% include '_j_snmp.j2' %}
+
+routing-options {
+    rib inet.0 {
+        static {
+            route 0.0.0.0/0 next-hop {{ mgmt_ip4|nethost(addr=1, nomask=True) }};
+        }
+    }
+}
+
+protocols {
+{% block top_protocols %}
+{% endblock %}
+    inactive: rstp {
+        bpdu-block-on-edge;
+{% for iface in accessifs %}
+{%   if not iface.is_virtual and not iface.tagged and (not 'uplink' in iface.tags) and not iface._iface.mgmt_only %}
+        interface {{ iface.ifname }} {
+            edge;
+        }
+{%   endif %}
+{% endfor %}
+    }
+    lldp {
+        port-id-subtype interface-name;
+        interface all;
+    }
+    lldp-med {
+        interface all;
+    }
+}
+
+{% block port_security %}
+
+{% endblock %}
+
+vlans {
+    {% for vlan in vlans.values()|sort %}
+    {% if vlan.vid in access_vlans or vlan.sitewide %}
+    V{{ vlan.vid }} {
+        vlan-id {{ vlan.vid }};
+{% if vlan.vid == get_mgmt_vlan(device) %}
+{% if is_junos_els(device) %}
+        l3-interface irb.{{ get_mgmt_vlan(device) }};
+{% else %}
+        l3-interface vlan.{{ get_mgmt_vlan(device) }};
+{% endif %}
+{% endif %}
+    
+}
+    {% endif %}
+    {% endfor %}
+}
+
+{% if device['poe'] %}
+poe {
+    interface all;
+{% for iface in accessifs if 'no-PoE' in iface.tags or (('uplink' in iface.tags) and (not iface.is_virtual and not iface.is_lag_master)) or iface["other"] == "Uplink"  %}
+    interface {{ iface.ifname }} {
+        disable;
+    }
+{% endfor %}
+}
+{% endif %}
+

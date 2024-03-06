@@ -1,0 +1,107 @@
+system {
+    host-name {{ hostname }};
+    domain-name {{ event_config["domain_name"] }};
+    {% if not hostname.startswith("rt") %}
+    auto-snapshot;
+    {% endif %}
+    time-zone UTC;
+    default-address-selection;
+    name-server {
+{% for ip in event_config["dns_servers"] %}
+        {{ ip }};
+{% endfor %}
+        9.9.9.10;
+    }
+    authentication-order password;
+    root-authentication {
+        encrypted-password "{{ event_config["crypted_admin_password"] }}"; ## SECRET-DATA
+    }
+    login {
+        message "Welcome to {{ hostname }} at {{ device['location']['display'] }}"
+        class OXIDIZED {
+            permissions [ view view-configuration ];
+        }
+	class junos_exporter {
+            allow-commands "show .*";
+        }
+
+        {% for (uid, user) in users | dictsort %}
+        {% if not hostname.startswith("rt-") or user in groups['core'] %}
+        {% if user in keys %}
+        user {{ user }} {
+            uid {{ uid }};
+            class super-user;
+            authentication {
+                {% if keys[user].startswith("ssh-ed25519") %}
+		{% if not is_junos_ssh_outdated(device) %}
+                ssh-ed25519 "{{ keys[user] }}";
+		{% endif %}
+                {% else %}
+                ssh-rsa "{{ keys[user] }}";
+                {% endif %}
+            }
+        }
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+    }
+    services {
+        ssh {
+            root-login deny;
+            protocol-version v2;
+            connection-limit 20;
+{% if "ex2200" in device.device_type.slug %}
+{% elif "ex2300-c-12t" in device.device_type.slug %}
+{% elif "ex3300" in device.device_type.slug %}
+{% else %}
+            sftp-server;
+{% endif %}
+            rate-limit 5;
+        }
+        netconf {
+            ssh;
+        }
+    }
+    syslog {
+        user * {
+            any emergency;
+        }
+        file messages {
+            any any;
+            authorization info;
+            match "!(MAC to be sent|bugatti_cbdev_ioctl|agg_pfe_fwd_options_info|nd6-change|arp-change|Input IFL not found|lcmd: martini_fan_set_pwm|lcmd: FAN: Set Speed|get_host_gbp_src_tag|vtep_ifl_l2hdr_compute)";
+{% if hostname.startswith("rt-") %}
+            archive size 20m files 20 world-readable;
+{% endif %}
+        }
+{% for ip in event_config["syslog_servers"] %}
+        host {{ ip }} {
+            match "!(nd6-change|bugatti_cbdev_ioctl|arp-change|Input IFL not found|lcmd: martini_fan_set_pwm|lcmd: FAN: Set Speed|get_host_gbp_src_tag|vtep_ifl_l2hdr_compute)";
+            any any;
+        }
+{% endfor %}
+        file interactive-commands {
+            interactive-commands any;
+        }
+    }
+    max-configurations-on-flash 49;
+{% if hostname.startswith("rt") %}
+    ddos-protection {
+        global {
+            disable-fpc;
+        }
+    }
+{% endif %}
+    ntp {
+{% for ip in event_config["ntp_servers"] %}
+        server {{ ip }};
+{% endfor %}
+        {% if hostname.startswith("rt") or hostname.startswith("qfx-") %}
+        source-address {{ net2ip(lo0['inet']) }};
+        {% else %}
+        source-address {{ net2ip(mgmt_ip4) }};
+        {% endif %}
+    }
+    {% block system %}{% endblock %}
+}
+

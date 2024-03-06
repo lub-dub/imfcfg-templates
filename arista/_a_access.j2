@@ -1,0 +1,181 @@
+no schedule tech-support
+boot console speed 9600
+!
+	!
+spanning-tree mode rstp
+no ip igmp snooping 
+!
+{% if mgmt_ip4 %}
+ip route 0.0.0.0/0 {{ mgmt_ip4|nethost(addr=1, nomask=True) }}
+!
+{% endif %}
+no ipv6 unicast-routing
+lldp run
+!
+{% if 'Arista-fan-speed-40' in device.tags %}
+environment fan-speed override 40
+{% endif %}
+{% if 'Arista-fan-speed-60' in device.tags %}
+environment fan-speed override 60
+{% endif %}
+!
+{% for vid in access_vlans|sort %}
+{%  set vlan = vlans[vid] %}
+vlan {{ vid }}
+ {% if vlan.name %}
+ name "{{ vlan.name|replace(' ', '-') }}"
+ {% else %}
+ name "{{ vlan.vid_name|replace(' ', '-') }}"
+ {% endif %}
+ exit
+{% endfor %}
+
+{####### magic begin #######}
+event-handler autoreload
+   trigger on-boot
+   action bash /mnt/flash/autoreload.sh 900 {{ mgmt_ip4|nethost(addr=1, nomask=True) }}
+   delay 90
+   asynchronous
+exit
+{####### magic end #######}
+
+{% for iface in accessifs %}
+interface {{ iface.ifname if iface.ifname != 'Management' else 'Management 1' }}
+ description "{{ iface.remote }}"
+{% if  iface.get_speed() == "1G" %}
+   speed forced 1000full
+{%   endif %}
+{% if  iface.get_speed() == "100M" %}
+   speed forced 100full
+{%   endif %}
+{%   if iface.get_speed() == "40G" %}
+   speed forced 40gfull
+{%   endif %}
+{%   if iface.ifname != 'Management1' %}
+{%   if iface.ifname == 'Vlan2232' or iface.remote == 'Management' %}
+ ip address {{ mgmt_ip4 }}
+{%   else %}
+{%   if (not iface.untagged) or iface.hybrid %}
+ switchport mode trunk
+{%     if iface.vlan_all %}
+ switchport trunk allowed vlan all
+{%     else %}
+{%       set pvlans = iface.vlans(vlans, untagged=True)|map(attribute='vid')|sort|join(",") %}
+{%       if pvlans != '' %}
+ switchport trunk allowed vlan {{ pvlans }}
+{%       endif %}
+{%     endif %}
+{%     if iface.untagged  %}
+ switchport trunk native vlan {{ iface.untagged }}
+{%     endif %}
+ spanning-tree bpdufilter enable
+ spanning-tree bpduguard disable
+{%   else %}
+ switchport access vlan {{ iface.untagged }}
+{%     if vlans[iface.untagged].layer3 %}
+ ip access-group access_v4_in in
+{%     endif %}
+
+ switchport port-security
+{% if device["device_type"]["display"] == "DCS-7050T-64" %}
+ switchport port-security maximum 32
+{% else %}
+ switchport port-security mac-address maximum 32
+{% endif %}
+ spanning-tree portfast
+{%     if 'bpdufilter-no-guard' in iface.tags %}
+ spanning-tree bpdufilter enable
+ spanning-tree bpduguard disable
+{%     else %}
+ spanning-tree bpdufilter disable
+ spanning-tree bpduguard enable
+{%     endif %}
+{%   endif %}
+ mtu 9214
+{% if not iface.ifname.startswith("Port") %}
+ lldp transmit
+ lldp receive
+{% endif %}
+{%   endif %}
+{%   endif %}
+ no shutdown
+ exit
+!
+{% endfor %}
+
+{% for iface in lagifs %}
+interface {{ iface.ifname if iface.ifname != 'Management' else 'Management 1' }}
+channel-group {{ iface.lagname.split(" ")[1] }} mode active 
+ no shutdown
+ exit
+!
+{% endfor %}
+
+
+errdisable recovery cause bpduguard
+errdisable recovery cause link-flap
+errdisable recovery cause no-internal-vlan
+errdisable recovery cause portchannelguard
+errdisable recovery cause portsec
+errdisable recovery cause tapagg
+errdisable recovery cause uplink-failure-detection
+errdisable recovery cause xcvr-unsupported
+errdisable recovery interval 120
+!
+no ip access-list standard 22
+ip access-list standard 22
+{% for net in event_config['operator_nets_ipv4'] %}
+ permit {{ net|nethost(nomask=True) }} {{ net|nethost(mask=True) }}
+{% endfor %}
+ deny any log
+!
+no ip access-list standard 123
+ip access-list standard 123
+{% for ip in event_config['ntp_servers'] %}
+ permit host {{ ip }}
+{% endfor %}
+ deny any log
+!
+! snmp
+no ip access-list standard 161
+ip access-list standard 161
+{% for net in event_config['operator_nets_ipv4'] %}
+ permit {{ net|nethost(nomask=True) }} {{ net|nethost(mask=True) }}
+{% endfor %}
+ deny any log
+!
+! deny all
+no ip access-list standard 99
+ip access-list standard 99
+ deny any log
+!
+!
+no ip access-list extended access_v4_in
+ip access-list extended access_v4_in
+  deny udp any eq bootps any
+  deny udp any any eq bootpc
+  permit ip any any
+!
+banner motd
+{{event_config["MOTD"]}}    
+                 Hostname:  $(hostname)
+                 Asset-tag: {{ hostname }}
+                 Location:  {{ device['location']['display'] }}
+EOF
+!
+{% for ip in event_config['ntp_servers'] %}
+ntp server {{ ip }}
+{% endfor %}
+{% for ip in event_config['syslog_servers'] %}
+logging host {{ ip }}
+{% endfor %}
+
+{% if event_config['radius_enabled'] %}
+{%   for ip in event_config['radius_servers'] %}
+radius-server host {{ ip }} key 7 {{ event_config['radius_key_crypt'] }}
+{%   endfor %}
+aaa authentication login default group radius local
+aaa authentication login console group radius local
+ip radius source-interface Loopback0
+{% endif %}
+!
