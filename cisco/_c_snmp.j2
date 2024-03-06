@@ -1,0 +1,5 @@
+snmp-server contact "{{ event_config["snmp_contact"] }}"
+snmp-server location "{{ event_config["snmp_location"] }}"
+snmp-server community {{ event_config["snmp_community"] }} ro SNMP-CLIENTS
+!
+

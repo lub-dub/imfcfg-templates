@@ -1,0 +1,119 @@
+!
+spanning-tree mode rapid-pvst
+!
+{% if mgmt_ip4 %}
+ip default-gateway {{ mgmt_ip4|nethost(addr=1, nomask=True) }}
+!
+{% endif %}
+lldp run
+!
+vtp mode transparent
+!
+{% for vid in access_vlans|sort %}
+{%  set vlan = vlans[vid] %}
+vlan {{ vid }}
+ {% if vlan.name %}
+ name "{{ vlan.name|replace(' ', '-') }}"
+ {% else %}
+ name "{{ vlan.vid_name|replace(' ', '-') }}"
+ {% endif %}
+ exit
+{% endfor %}
+
+!
+system mtu jumbo 9198
+!
+{% for iface in accessifs %}
+{% if iface.ifname != 'Fa0' %}
+interface {{ iface.ifname }}
+ description "{{ iface.remote }}"
+{%   if 'speed-override-1G' in iface.tags %}
+   duplex full
+   speed 1000
+{%   endif %}
+{%   if iface.ifname == 'Vlan2232' or iface.remote == 'Management' %}
+ ip address {{ mgmt_ip4|nethost(nomask=True) }} {{ mgmt_ip4|nethost(mask=True)}}
+{%   else %}
+{%     if (not iface.untagged) or iface.hybrid %}
+ switchport mode trunk
+{%       if iface.vlan_all %}
+ switchport trunk allowed vlan all
+{%       else %}
+{%         set pvlans = iface.vlans(vlans, untagged=True)|map(attribute='vid')|sort|join(",") %}
+{%         if pvlans != '' %}
+ switchport trunk allowed vlan {{ pvlans }}
+{%         endif %}
+{%       endif %}
+{%       if iface.untagged  %}
+ switchport trunk native vlan {{ iface.untagged }}
+{%       endif %}
+ spanning-tree bpdufilter enable
+ spanning-tree bpduguard disable
+{%     else %}
+ switchport mode access
+ switchport access vlan {{ iface.untagged }}
+{%       if vlans[iface.untagged].layer3 %}
+ ip access-group access_v4_in in
+{%       endif %}
+ spanning-tree portfast
+ spanning-tree bpdufilter disable
+ spanning-tree bpduguard enable
+{%     endif %}
+ lldp transmit
+ lldp receive
+ load-interval 30
+{%   endif %}
+ no shutdown
+ exit
+!
+{% endif %}
+{% endfor %}
+!
+errdisable recovery cause bpduguard
+errdisable recovery cause gbic-invalid
+errdisable recovery cause link-flap
+errdisable recovery cause mac-limit
+errdisable recovery cause psecure-violation
+errdisable recovery interval 120
+!
+no ip access-list extended access_v4_in
+ip access-list extended access_v4_in
+  deny udp any eq bootps any
+  deny udp any any eq bootpc
+  permit ip any any
+!
+banner motd #
+{{event_config["MOTD"]}}    
+                 Hostname:  {{ hostname }}
+                 Asset-tag: {{ hostname }}
+                 Location:  {{ device['rack']['display_name'] }}
+#
+!
+{% for ip in event_config['ntp_servers'] %}
+ntp server {{ ip }}
+{% endfor %}
+{% for ip in event_config['syslog_servers'] %}
+logging host {{ ip }}
+{% endfor %}
+
+{% if event_config['radius_enabled'] %}
+{%   for ip in event_config['radius_servers'] %}
+radius-server host {{ ip }} key 7 {{ event_config['radius_key_crypt'] }}
+{%   endfor %}
+aaa authentication login default group radius local
+aaa authentication login console group radius local
+ip radius source-interface Vlan2232
+{% else %}
+aaa authentication login default local
+aaa authentication login console local
+{% endif %}
+!
+line console 0
+  login authentication console
+!
+line vty 0 15
+  login authentication default
+!
+default interface Fa0
+!
+end
