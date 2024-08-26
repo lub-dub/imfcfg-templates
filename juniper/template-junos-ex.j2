@@ -19,7 +19,7 @@
 {%     endif %}
         unit 0 {
             family ethernet-switching {
-{%     if (iface.tagged|length > 1) or iface.vlan_all  %}
+{%     if (iface.tagged|length > 2) or iface.vlan_all  %}
                 port-mode trunk;
 {%       if iface.untagged %}
                 native-vlan-id {{ vlans[iface.untagged].vid }};
