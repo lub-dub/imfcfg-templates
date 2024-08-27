@@ -10,6 +10,12 @@ snmp {
         authorization read-only;
         client-list-name noc;
     }
+    client-list noc {
+{% for ip in event_config["snmp_pollers"] %}
+       {{ ip }};
+{% endfor %}
+	}
+
     {% block snmp %}{% endblock %}
 }
 
